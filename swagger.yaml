@@ -8,7 +8,7 @@ info:
     - `POST /arma-report` — self-contained 5-page briefing vs a **manually supplied competitor**
       (`competitor_url`, optional `competitor_position`). One call, no prerequisites.
 
-    **Legacy workflow (API-only, no longer in the UI):**
+    **Deprecated workflow (still functional, no longer used by the UI):**
     1. `POST /lite-report` — scores a business, locks competitor data, returns a PDF (or JSON) lite report
     2. `POST /full-report` — deep-dive audit PDF; reads the competitor locked by step 1
 
@@ -41,8 +41,13 @@ paths:
   /lite-report:
     post:
       tags: [Reports]
-      summary: Generate a Lite Audit Report
+      summary: "[DEPRECATED] Generate a Lite Audit Report"
+      deprecated: true
       description: |
+        > ⚠️ **Deprecated** — replaced by `POST /arma-report`, which needs no prior call and
+        > uses a manually supplied competitor. This endpoint still works but is no longer
+        > used by the dashboard UI and may be removed in a future version.
+
         Fetches Google Business Profile data, map pack rankings (DataForSEO primary /
         Google Places fallback), monthly traffic, and generates a cold email + PDF lite report.
 
@@ -111,8 +116,13 @@ paths:
   /full-report:
     post:
       tags: [Reports]
-      summary: Generate a Full Audit Report
+      summary: "[DEPRECATED] Generate a Full Audit Report"
+      deprecated: true
       description: |
+        > ⚠️ **Deprecated** — replaced by `POST /arma-report`, which needs no prior call and
+        > uses a manually supplied competitor. This endpoint still works but is no longer
+        > used by the dashboard UI and may be removed in a future version.
+
         Deep-dive audit PDF. **Requires `POST /lite-report` to have been called first** for
         the same domain — competitor data is read from SQLite for consistency.
 
