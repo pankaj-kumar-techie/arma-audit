@@ -9,18 +9,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const healthText = document.getElementById('health-text');
   
   // Forms
-  const liteForm = document.getElementById('lite-form');
-  const liteSubmit = document.getElementById('lite-submit');
-  const fullForm = document.getElementById('full-form');
-  const fullSubmit = document.getElementById('full-submit');
+  const armaForm = document.getElementById('arma-form');
+  const armaSubmit = document.getElementById('arma-submit');
   const speedForm = document.getElementById('speed-check-form');
   const speedSubmit = document.getElementById('speed-submit-btn');
   const debugForm = document.getElementById('mappack-debug-form');
   const debugSubmit = document.getElementById('debug-submit-btn');
+  // Developer Mode + Pipeline Trace
+  const devModeToggle = document.getElementById('dev-mode-toggle');
+  const devTraceSection = document.getElementById('dev-trace-section');
+  const traceForm = document.getElementById('trace-form');
+  const traceSubmit = document.getElementById('trace-submit-btn');
   
-  // Format selection
-  const formatToggles = document.querySelectorAll('.toggle-group .toggle-btn');
-  let selectedFormat = 'pdf'; // default
+  // ARMA Report output-format selection
+  const armaFormatToggles = document.querySelectorAll('.toggle-btn[data-arma-format]');
+  let armaSelectedFormat = 'pdf'; // default
 
   // Viewers
   const viewerTitleIcon = document.getElementById('viewer-type-icon');
@@ -79,15 +82,42 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ── Format Toggle Logic ───────────────────────────────────────────────────
-  formatToggles.forEach(btn => {
+  // ── ARMA Report Format Toggle Logic ───────────────────────────────────────
+  armaFormatToggles.forEach(btn => {
     btn.addEventListener('click', () => {
-      formatToggles.forEach(b => b.classList.remove('active'));
+      armaFormatToggles.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      selectedFormat = btn.getAttribute('data-format');
-      log(`Selected output format: ${selectedFormat.toUpperCase()}`, 'info');
+      armaSelectedFormat = btn.getAttribute('data-arma-format');
+      log(`ARMA output format set to: ${armaSelectedFormat.toUpperCase()}`, 'info');
     });
   });
+
+  // ── Live-Location Helper ──────────────────────────────────────────────────
+  // The Search surfaces (place/business) are strongly proximity-personalized, so for an
+  // exact match we ask the browser for the user's live location. Resolves to {lat,lng} on
+  // grant, or null on denial/unavailable/timeout — the server then falls back to the city
+  // centroid (the format that works for a non-local Google Search check).
+  function getLiveLocation(timeoutMs = 8000) {
+    return new Promise(resolve => {
+      if (!('geolocation' in navigator)) {
+        log('Geolocation not supported by this browser — using city centroid.', 'warning');
+        return resolve(null);
+      }
+      log('Requesting your live location for an exact Google Search match...', 'info');
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          const { latitude, longitude } = pos.coords;
+          log(`Live location captured (${latitude.toFixed(4)}, ${longitude.toFixed(4)}).`, 'success');
+          resolve({ lat: latitude, lng: longitude });
+        },
+        err => {
+          log(`Live location unavailable (${err.message}) — using city centroid instead.`, 'warning');
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 300000 }
+      );
+    });
+  }
 
   // ── Helper functions for Viewer View States ──────────────────────────────
   function clearViewers() {
@@ -135,8 +165,66 @@ document.addEventListener('DOMContentLoaded', () => {
     
     viewerActions.style.display = 'flex';
     copyJsonBtn.style.display = 'block';
-    
+
     currentJsonData = jsonData;
+  }
+
+  // Renders a /debug/trace response in log style: a parameter/summary header followed by the
+  // ordered engine log lines. The Copy button copies the FULL structured JSON (logs included),
+  // which is what should be pasted back for debugging.
+  function showTraceView(data, title = 'Pipeline Trace') {
+    const p = data.params || {};
+    const r = data.ranking;
+    const header = [
+      `# ARMA PIPELINE TRACE`,
+      `ok: ${data.ok}   timing: ${data.timing_ms}ms   log_lines: ${data.log_count}`,
+      ``,
+      `## PARAMS`,
+      `url: ${p.url}`,
+      `domain: ${p.domain}`,
+      `submitted_location: ${p.submitted_city}, ${p.submitted_state}`,
+      `vertical: ${p.vertical}`,
+      `match_type: ${p.match_type}`,
+      `live_location: ${p.live_location ? p.live_location.lat + ',' + p.live_location.lng : 'none'} (used: ${p.used_live_location})`,
+      ``,
+      `## GBP`,
+      `matched_name: ${data.gbp?.matched_name}`,
+      `place_id: ${data.gbp?.place_id || 'NONE'}`,
+      `rating/reviews: ${data.gbp?.rating} / ${data.gbp?.review_count}`,
+      `audited_market: ${data.gbp?.market_city}, ${data.gbp?.market_state}`,
+      `lead_gbp_city: ${data.gbp?.gbp_city}, ${data.gbp?.gbp_state}${data.gbp?.gbp_city_differs ? '  (differs from market — auditing the searched market)' : ''}`,
+      ``,
+      `## RANKING`,
+      r ? `lead_position: #${r.lead_position}` : `(no ranking — pipeline returned null)`,
+      r ? `surface: ${r.surface_label}  |  data_source: ${r.data_source}` : '',
+      r ? `verification_url: ${r.verification_url}` : '',
+      r ? `competitor: #${r.competitor.position} ${r.competitor.name} (${r.competitor.rating}★ ${r.competitor.review_count})` : '',
+      r ? `` : '',
+      r ? `full_pack:` : '',
+      ...(r ? (r.full_pack || []).map(x => `  #${x.position} ${x.name} (${x.rating}★ · ${x.review_count})${x.isLead ? ' ← LEAD' : ''}${x.isCompetitor ? ' ← COMP' : ''}`) : []),
+      ``,
+      `## ENGINE LOG (${data.log_count} lines)`,
+    ].filter(l => l !== '').join('\n');
+
+    const logLines = (data.logs || [])
+      .map(l => `${(l.t || '').replace('T', ' ').replace('Z', '')} ${l.level.toUpperCase().padEnd(5)} ${l.msg}`)
+      .join('\n');
+
+    clearViewers();
+    viewerPlaceholder.style.display = 'none';
+    jsonPre.style.display = 'block';
+    jsonPre.textContent = `${header}\n${logLines}`;
+
+    viewerTitleIcon.className = 'fa-solid fa-microscope';
+    viewerTitleIcon.style.color = '#f59e0b';
+    viewerTitleText.textContent = title;
+
+    viewerActions.style.display = 'flex';
+    copyJsonBtn.style.display = 'block';
+    copyJsonBtn.title = 'Copy full trace JSON (paste this back for debugging)';
+
+    // Copy yields the complete machine-readable payload, not just the rendered text.
+    currentJsonData = data;
   }
 
   function showDiagnosticsView() {
@@ -269,117 +357,68 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // ── Submit Lite Report ────────────────────────────────────────────────────
-  liteForm.addEventListener('submit', async (e) => {
+  // ── Submit ARMA Report ────────────────────────────────────────────────────
+  // Competitor is a manual input here — no automatic Google Maps/DataForSEO ranking
+  // selection, and the resulting report shows no ranking/position data.
+  // Users can paste "junk-king.com" or "https://junk-king.com" — both work.
+  const ensureScheme = v => (v && !/^https?:\/\//i.test(v) ? `https://${v}` : v);
+
+  armaForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    
-    const url = document.getElementById('lite-url').value.trim();
-    const city = document.getElementById('lite-city').value.trim();
-    const state = document.getElementById('lite-state').value.trim().toUpperCase();
-    const vertical = document.getElementById('lite-vertical').value.trim();
-    
-    if (!url || !city || !state) {
-      log('Please fill in URL, City, and State.', 'warning');
+
+    const url = ensureScheme(document.getElementById('arma-url').value.trim());
+    const competitorUrl = ensureScheme(document.getElementById('arma-competitor-url').value.trim());
+    const competitorPositionRaw = document.getElementById('arma-competitor-position').value.trim();
+    const city = document.getElementById('arma-city').value.trim();
+    const state = document.getElementById('arma-state').value.trim().toUpperCase();
+    const vertical = document.getElementById('arma-vertical').value.trim();
+
+    if (!url || !competitorUrl || !city || !state) {
+      log('Please fill in URL, Competitor URL, City, and State.', 'warning');
       return;
     }
-    
-    liteSubmit.disabled = true;
-    const stopTimer = startProgressTimer(`Lite Report [${url}]`);
-    log(`Triggering Lite Report for "${city}, ${state}"...`, 'info');
+
+    armaSubmit.disabled = true;
+    const stopTimer = startProgressTimer(`ARMA Report [${url}] vs [${competitorUrl}]`);
+    log(`Triggering ARMA Report for "${city}, ${state}" against manually chosen competitor`, 'info');
 
     try {
-      const requestBody = { url, city, state };
+      const requestBody = { url, city, state, competitor_url: competitorUrl };
       if (vertical) requestBody.vertical = vertical;
-      
-      // If user selected JSON format, we ask the backend for json output format
-      if (selectedFormat === 'json') {
-        requestBody.format = 'json';
-      }
+      if (competitorPositionRaw) requestBody.competitor_position = Number(competitorPositionRaw);
+      if (armaSelectedFormat === 'json') requestBody.format = 'json';
 
-      const response = await fetch('/lite-report', {
+      const response = await fetch('/arma-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
       });
 
       const contentType = response.headers.get('content-type');
-      
-      // Check if response is JSON (error or JSON report)
+
       if (!response.ok || (contentType && contentType.includes('application/json'))) {
         const result = await response.json();
-        if (response.ok && selectedFormat === 'json') {
-          stopTimer();
-          log('Lite Report (JSON) generated successfully!', 'success');
-          showJsonView(result, `Lite Report: ${result.domain}`);
-          
-          // Pre-fill the Full Report URL input for convenience
-          document.getElementById('full-url').value = url;
+        stopTimer();
+        if (response.ok && armaSelectedFormat === 'json') {
+          log('ARMA Report (JSON) generated successfully!', 'success');
+          showJsonView(result, `ARMA Report: ${url.replace(/https?:\/\/(www\.)?/, '')}`);
         } else {
-          stopTimer();
-          log(`Lite Report failed: ${result.error || 'Server error'}`, 'error');
+          log(`ARMA Report failed: ${result.error || 'Server error'}`, 'error');
           showJsonView(result, 'Error Details');
         }
       } else {
-        // Response is PDF Blob
         const blob = await response.blob();
         stopTimer();
-        log('Lite Report (PDF) generated successfully!', 'success');
-        
+        log('ARMA Report (PDF) generated successfully!', 'success');
+
         const blobUrl = URL.createObjectURL(blob);
-        showPdfView(blobUrl, `Lite Report: ${url.replace(/https?:\/\/(www\.)?/, '')}`);
-        
-        // Pre-fill Full Report form
-        document.getElementById('full-url').value = url;
+        showPdfView(blobUrl, `ARMA Report: ${url.replace(/https?:\/\/(www\.)?/, '')}`);
       }
     } catch (err) {
       stopTimer();
       log(`Network error: ${err.message}`, 'error');
     } finally {
-      liteSubmit.disabled = false;
-      checkHealth();
-    }
-  });
-
-  // ── Submit Full Report ────────────────────────────────────────────────────
-  fullForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    const url = document.getElementById('full-url').value.trim();
-    if (!url) {
-      log('Please fill in target URL.', 'warning');
-      return;
-    }
-
-    fullSubmit.disabled = true;
-    const stopTimer = startProgressTimer(`Full Report [${url}] (Note: this runs crawlers, PageSpeed and Claude AI, it may take 1-2 minutes)`);
-
-    try {
-      const response = await fetch('/full-report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
-      });
-
-      const contentType = response.headers.get('content-type');
-
-      if (!response.ok || (contentType && contentType.includes('application/json'))) {
-        const result = await response.json();
-        stopTimer();
-        log(`Full Report failed: ${result.error || 'Server error'}`, 'error');
-        showJsonView(result, 'Error Details');
-      } else {
-        const blob = await response.blob();
-        stopTimer();
-        log('Full Report (PDF) generated successfully!', 'success');
-        
-        const blobUrl = URL.createObjectURL(blob);
-        showPdfView(blobUrl, `Full Audit: ${url.replace(/https?:\/\/(www\.)?/, '')}`);
-      }
-    } catch (err) {
-      stopTimer();
-      log(`Network error: ${err.message}`, 'error');
-    } finally {
-      fullSubmit.disabled = false;
+      armaSubmit.disabled = false;
       checkHealth();
     }
   });
@@ -443,6 +482,70 @@ document.addEventListener('DOMContentLoaded', () => {
       log(`Map Pack Debug network error: ${err.message}`, 'error');
     } finally {
       debugSubmit.disabled = false;
+    }
+  });
+
+  // ── Developer Mode ────────────────────────────────────────────────────────
+  // Persisted in localStorage; gates visibility of the Pipeline Trace tool.
+  function applyDevMode(on) {
+    devTraceSection.style.display = on ? 'block' : 'none';
+    devModeToggle.checked = on;
+    localStorage.setItem('armaDevMode', on ? '1' : '0');
+  }
+  applyDevMode(localStorage.getItem('armaDevMode') === '1');
+  devModeToggle.addEventListener('change', () => {
+    applyDevMode(devModeToggle.checked);
+    log(`Developer Mode ${devModeToggle.checked ? 'enabled' : 'disabled'}.`, devModeToggle.checked ? 'success' : 'info');
+  });
+
+  // ── Pipeline Trace ────────────────────────────────────────────────────────
+  traceForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = document.getElementById('trace-url').value.trim();
+    const city = document.getElementById('trace-city').value.trim();
+    const state = document.getElementById('trace-state').value.trim().toUpperCase();
+    const vertical = document.getElementById('trace-vertical').value.trim();
+    const matchType = document.getElementById('trace-match').value;
+    const useLoc = document.getElementById('trace-use-location').checked;
+
+    if (!url || !city || !state) {
+      log('Trace needs URL, City, and State.', 'warning');
+      return;
+    }
+
+    traceSubmit.disabled = true;
+    const stopTimer = startProgressTimer(`Pipeline Trace [${url}] · ${matchType.toUpperCase()}`);
+
+    try {
+      const body = { url, city, state, matchType };
+      if (vertical) body.vertical = vertical;
+
+      // Live location only matters for the location-personalized Search surfaces.
+      if (useLoc && (matchType === 'place' || matchType === 'business')) {
+        const loc = await getLiveLocation();
+        if (loc) { body.lat = loc.lat; body.lng = loc.lng; }
+      }
+
+      const res = await fetch('/debug/trace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      stopTimer();
+
+      if (res.ok) {
+        log(`Trace complete: ${data.log_count} log lines, lead #${data.ranking ? data.ranking.lead_position : '—'} in ${data.timing_ms}ms.`, 'success');
+        showTraceView(data, `Trace: ${url.replace(/https?:\/\/(www\.)?/, '')} · ${matchType}`);
+      } else {
+        log(`Trace failed: ${data.error || 'server error'}`, 'error');
+        showJsonView(data, 'Trace Error');
+      }
+    } catch (err) {
+      stopTimer();
+      log(`Trace network error: ${err.message}`, 'error');
+    } finally {
+      traceSubmit.disabled = false;
     }
   });
 

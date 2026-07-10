@@ -8,10 +8,42 @@ import { scrapeMapsPack } from './gmaps';
 // Neutral Google experiment-params token for Maps fallback searches.
 const MAPS_G_EP = 'Egdnd3Mtd2l6IgFoKgIIAEgAUABYAHAAeACQAQCYAQCgAQCqAQC4AQPIAQCYAgCgAgCYAwCSBwCgBwCyBwC4BwDCBwDIBwCACAE';
 
+// Which Google surface the report should match. Each maps to its own ranking
+// algorithm — these surfaces are ranked INDEPENDENTLY by Google and routinely
+// differ by 1-3 positions, so the user picks the one they verify against:
+//   map      → google.com/maps (the Maps app/site)        → puppeteer scrape / DFS maps
+//   place    → Google Search "Places" / "More places"      → DFS local_finder (full list)
+//   business → Google Search "All" tab "Businesses" 3-pack  → DFS organic local_pack
+export type MatchType = 'map' | 'place' | 'business';
+export const DEFAULT_MATCH_TYPE: MatchType = 'map';
+
+export const SURFACE_LABEL: Record<MatchType, string> = {
+  map:      'Google Maps',
+  place:    "Google Search – Places",
+  business: "Google Search – Businesses",
+};
+
+export type UserLocation = { lat: number; lng: number };
+
+// Generic trade / legal-suffix words shared across most local-business names. Matching on
+// these alone produces false lead matches, so they're excluded from the "distinctive token"
+// test and only used as a weak tiebreak (see lead name match below).
+const GENERIC_NAME_WORDS = new Set<string>([
+  'heating', 'cooling', 'air', 'conditioning', 'conditioner', 'hvac', 'heat', 'cool',
+  'plumbing', 'plumber', 'mechanical', 'comfort', 'refrigeration', 'furnace', 'ac',
+  'electric', 'electrical', 'service', 'services', 'repair', 'systems', 'system',
+  'solutions', 'company', 'inc', 'llc', 'co', 'the', 'and', 'group', 'home', 'pro',
+]);
+
 // Builds the Google Search verification URL — short form matches what users actually type.
-export function buildSearchUrl(vertical: string, city: string): string {
+// business → the "All" tab (where the Businesses 3-pack lives); place → the local "Places"
+// list (udm=1). A coordinate isn't expressible in a shareable search URL, so this is only a
+// fallback when the data source didn't return its own location-pinned check_url.
+export function buildSearchUrl(vertical: string, city: string, matchType: MatchType = 'business'): string {
   const q = encodeURIComponent(`${vertical.toLowerCase()} in ${city.toLowerCase()}`).replace(/%20/g, '+');
-  return `https://www.google.com/search?q=${q}&udm=1`;
+  return matchType === 'place'
+    ? `https://www.google.com/search?q=${q}&udm=1`
+    : `https://www.google.com/search?q=${q}`;
 }
 
 // Builds the Google Maps URL for the Maps scrape — includes state in query.
@@ -20,54 +52,73 @@ function buildMapsUrl(vertical: string, city: string, state: string, lat: number
   return `https://www.google.com/maps/search/${q}/@${lat},${lng},11z/data=!3m1!4b1?entry=ttu&g_ep=${MAPS_G_EP}`;
 }
 
-// DataForSEO local_finder scrapes google.com/search (the same page a prospect sees).
-// Falls back to Maps endpoint, then to Google Places API.
+// DataForSEO fallback — the endpoint chosen depends on which Google surface the
+// caller wants to match (matchType):
+//   place    → local_finder  (Google Search "Places"/"More places" full list)
+//   business → organic        (the "Businesses" local_pack on the Search "All" tab)
+//   map      → maps           (Google Maps — only reached when the puppeteer scrape fails)
+//
+// When real coordinates are available we pin the search to them via location_coordinate so
+// the ranking matches what a searcher physically at that point sees (Search-local results are
+// strongly proximity-personalized). Without coordinates we fall back to a broad,
+// relevance-ranked national "Places" page (location_name: 'United States'), which is what a
+// non-local searcher checking from outside the city sees.
 async function getMapsPackFromDFS(
   vertical: string,
   city: string,
   state: string,
+  matchType: MatchType,
+  coords: { lat: number; lng: number } | null,
 ): Promise<{ places: PlaceResult[]; source: string; checkUrl: string } | null> {
   if (!process.env.DATAFORSEO_LOGIN || !process.env.DATAFORSEO_PASSWORD) return null;
   const fullState = await resolveStateName(city, state);
   const locationName = `${city},${fullState},United States`;
 
-  // Geocode once — used by Maps fallback URL.
-  const coords = await geocodeCity(city, state);
-
-  // Primary: local_finder scrapes Google Search Places tab (matches manual verification on udm=1).
-  // Use "vertical in city" WITHOUT state — matches exactly what a user types when searching.
-  // location_name: 'United States' (country-level, no coordinate) makes Google return the broad
-  // relevance-ranked "Places" page for the named city — the same results a non-local searcher
-  // (e.g. the agency, checking from outside the lead's city) sees. A city-specific
-  // location_coordinate/location_name instead returns a proximity-anchored "near me" pack, which
-  // doesn't match manual verification checks.
-  // Secondary: Maps endpoint URL scrape — reliable, returns place_ids, but different surface.
+  // "vertical in city" WITHOUT state — matches exactly what a user types when searching.
   const shortQuery  = `${vertical.toLowerCase()} in ${city.toLowerCase()}`;
   const searchQuery = `${vertical.toLowerCase()} in ${city.toLowerCase()} ${fullState.toLowerCase()}`;
-  const attempts: Array<{ endpoint: string; body: Record<string, any>; label: string; timeout: number }> = [
-    {
-      endpoint: 'serp/google/local_finder/live/advanced',
-      body: {
-        keyword: shortQuery,
-        location_name: 'United States',
-        language_name: 'English',
-        depth: 20,
-      },
-      label: 'dataforseo_local_finder',
-      timeout: 90000,
-    },
-    {
-      endpoint: 'serp/google/maps/live/advanced',
-      body: coords
-        ? { url: buildMapsUrl(vertical, city, fullState, coords.lat, coords.lng), depth: 100, language_name: 'English' }
-        : { keyword: searchQuery, location_name: locationName, language_name: 'English', depth: 100 },
-      label: 'dataforseo_maps',
-      timeout: 60000,
-    },
-  ];
+  // DataForSEO location_coordinate: "latitude,longitude,zoom". zoom≈12 ≈ city-wide.
+  const locCoord = coords ? `${coords.lat},${coords.lng},12z` : undefined;
+  const searchLocation = locCoord
+    ? { location_coordinate: locCoord }
+    : { location_name: 'United States' };
 
+  // Build the attempt chain head-first for the requested surface, then degrade to the others
+  // so a single-surface API hiccup still yields a ranking rather than a hard failure.
+  const localFinder = {
+    endpoint: 'serp/google/local_finder/live/advanced',
+    body: { keyword: shortQuery, ...searchLocation, language_name: 'English', depth: 20 },
+    label: 'dataforseo_local_finder',
+    timeout: 90000,
+  };
+  // The "Businesses" 3-pack is an element inside the organic Search results page — depth 20 is
+  // enough to render it; we parse the local_pack items it contains.
+  const organicLocalPack = {
+    endpoint: 'serp/google/organic/live/advanced',
+    body: { keyword: shortQuery, ...searchLocation, language_name: 'English', depth: 20 },
+    label: 'dataforseo_business_pack',
+    timeout: 90000,
+  };
+  const mapsEndpoint = {
+    endpoint: 'serp/google/maps/live/advanced',
+    body: coords
+      ? { url: buildMapsUrl(vertical, city, fullState, coords.lat, coords.lng), depth: 100, language_name: 'English' }
+      : { keyword: searchQuery, location_name: locationName, language_name: 'English', depth: 100 },
+    label: 'dataforseo_maps',
+    timeout: 60000,
+  };
+
+  const attempts: Array<{ endpoint: string; body: Record<string, any>; label: string; timeout: number }> =
+    matchType === 'business' ? [organicLocalPack, localFinder, mapsEndpoint]
+    : matchType === 'map'     ? [mapsEndpoint, localFinder]
+    :                           [localFinder, organicLocalPack, mapsEndpoint];
+
+  console.log(`[MapPack] DFS plan for "${shortQuery}" (${matchType}) → ${attempts.map(a => a.label).join(' → ')}`);
   for (const { endpoint, body, label, timeout } of attempts) {
     const queryDesc = (body as any).url ?? (body as any).keyword ?? label;
+    // The exact outbound request — keyword, depth, and the location param (location_coordinate
+    // for a pinned/located search vs location_name for a broad national check).
+    console.log(`[MapPack] → POST ${endpoint} | body=${JSON.stringify(body)}`);
     try {
       const res = await fetchT(
         `https://api.dataforseo.com/v3/${endpoint}`,
@@ -91,9 +142,10 @@ async function getMapsPackFromDFS(
       const typeCounts = rawItems.reduce((m: any, i: any) => { m[i.type] = (m[i.type] ?? 0) + 1; return m; }, {});
       console.log(`[MapPack] ${label} raw ${rawItems.length} items, types:`, JSON.stringify(typeCounts));
       // maps endpoint items have type='maps_search'.
-      // local_finder endpoint items have type='local_pack' (confirmed from live API response).
-      // Filter to the right type so ads/featured-snippets don't inflate rankings.
-      const typeFilter = endpoint.includes('local_finder') ? 'local_pack' : 'maps_search';
+      // local_finder AND organic endpoints expose businesses as type='local_pack'
+      // (the organic SERP's "Businesses" 3-pack is a local_pack element).
+      // Filter to the right type so ads/featured-snippets/organic links don't inflate rankings.
+      const typeFilter = endpoint.includes('/maps/') ? 'maps_search' : 'local_pack';
       const typed = rawItems.filter((i: any) => i.type === typeFilter);
       const items = (typed.length > 0 ? typed : rawItems)
         .sort((a: any, b: any) => (a.rank_group ?? 999) - (b.rank_group ?? 999));
@@ -143,6 +195,12 @@ export const DEFAULT_EXCLUDED_BRANDS: string[] = [];
 
 export interface MapPackConfig {
   excludedBrands?: string[];
+  // Which Google surface to match (defaults to Maps). See MatchType.
+  matchType?: MatchType;
+  // The searcher's live coordinates. When provided, the ranking is pinned to this
+  // exact point (matches what THIS user sees) and the shared cache is bypassed so
+  // one user's location-specific result never leaks to another.
+  userLocation?: UserLocation;
 }
 
 //  Lead #1    → compare with #2 (closest challenger)
@@ -158,6 +216,19 @@ function pickCompetitorRank(leadPos: number): number {
   if (leadPos <= 8)  return 3;
   if (leadPos <= 13) return 4;
   return 5;
+}
+
+// Max distance a live user location may sit from the searched city centroid before we treat
+// it as a remote auditor's device and ignore it. ~160 km keeps same-metro / adjacent-town
+// locations valid while rejecting another-state or another-country device coordinates (an
+// agency auditing US cities from abroad must not anchor the search to its own continent).
+const LIVE_LOCATION_MAX_KM = 160;
+
+function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371, toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
 }
 
 // Geocoding API — city centre lat/lng for Places location bias.
@@ -217,6 +288,18 @@ export type MapPackResult = {
   }>;
   dataSource: string;
   verificationUrl: string;
+  matchType: MatchType;
+  surfaceLabel: string;
+  // How (and whether) the submitted business was located in the pack. Used by the
+  // report layer to validate lead identity before labelling a row as "YOU".
+  lead: {
+    found: boolean;
+    matchMethod: 'place_id' | 'name_review' | 'none';
+    name: string;
+    rating: number;
+    review_count: number;
+    place_id: string | null;
+  };
   competitor: {
     name: string; rating: number; review_count: number; position: number;
     domain: string; place_id: string; gbp_url: string | null;
@@ -233,17 +316,49 @@ export async function getMapPackPosition(
   leadRating: number,
   config: MapPackConfig = {},
 ): Promise<{ primaryMapData: MapPackResult; leadPosition: number } | null> {
-  const { excludedBrands = DEFAULT_EXCLUDED_BRANDS } = config;
+  const { excludedBrands = DEFAULT_EXCLUDED_BRANDS, matchType = DEFAULT_MATCH_TYPE, userLocation } = config;
 
-  const cacheKey = vertical.toLowerCase();
+  // Cache is keyed per surface — map/place/business rank independently and must not collide.
+  const cacheKey = `${vertical.toLowerCase()}::${matchType}`;
+  const surfaceLabel = SURFACE_LABEL[matchType];
+
+  console.log(`[MapPack] Lookup "${vertical}" in "${city}, ${state}" | surface=${matchType} (${surfaceLabel}) | cacheKey="${cacheKey}"`);
+
+  // Anchor the search to a coordinate so the ranking matches a manual search for THIS city.
+  // The city centroid is the baseline — a "<vertical> in <city>" search centers there. A live
+  // user location is used ONLY when it's plausibly inside the searched market; a remote
+  // auditor's device far away would otherwise anchor the search to the wrong region, so it's
+  // rejected in favour of the centroid. This keeps the API ranking aligned with what the
+  // client sees doing the same manual search.
+  const cityCentroid = await geocodeCity(city, state);
+  let coords = cityCentroid;
+  let usingLive = false;
+  if (userLocation) {
+    const km = cityCentroid ? haversineKm(userLocation, cityCentroid) : Infinity;
+    if (cityCentroid && km <= LIVE_LOCATION_MAX_KM) {
+      coords = userLocation;
+      usingLive = true;
+    } else {
+      console.warn(
+        `[MapPack] Ignoring live location ${userLocation.lat},${userLocation.lng} — ` +
+        `${Number.isFinite(km) ? Math.round(km) + 'km' : 'unknown distance'} from the "${city}" centroid. ` +
+        `Anchoring to the searched city so the ranking matches a manual "${city}, ${state}" search.`
+      );
+    }
+  }
+  console.log(
+    `[MapPack] Coordinate anchor: ${coords ? `${coords.lat},${coords.lng}` : 'NONE (broad national check)'} ` +
+    `(${usingLive ? 'LIVE user location' : coords ? 'city centroid' : 'unavailable'})`
+  );
 
   // ── Cache (6-hour TTL — rankings shift intraday; keep snapshots close to what a
-  // manual verification check sees) ────────────────────────────────────────────
+  // manual verification check sees). Live-location runs bypass the shared cache so a
+  // result pinned to one user's GPS point is never served to another. ──────────────
   let places: PlaceResult[];
   let dataSource: string;
   let checkUrl = '';
 
-  const cached: any = db.prepare(
+  const cached: any = usingLive ? null : db.prepare(
     `SELECT items_json FROM mappack_cache WHERE keyword=? AND city=? AND state=? AND fetched_at>datetime('now','-6 hours')`
   ).get(cacheKey, city, state);
 
@@ -253,13 +368,14 @@ export async function getMapPackPosition(
     places = Array.isArray(parsed) ? parsed : parsed.places;
     checkUrl = Array.isArray(parsed) ? '' : (parsed.checkUrl ?? '');
     dataSource = 'cached';
-    console.log(`[MapPack] Cache hit: "${vertical} ${city}" (${places.length} results)`);
+    console.log(`[MapPack] Cache HIT: "${cacheKey}" @ ${city},${state} (${places.length} results)`);
   } else {
-    // Primary: direct Google Maps scrape — the exact list a prospect sees when they
-    // search "hvac in toledo" on Google Maps. The scraped URL doubles as the
-    // verification link, so opening it reproduces this ranking.
-    const coords = await geocodeCity(city, state);
-    const gmaps = coords ? await scrapeMapsPack(vertical, city, coords) : null;
+    console.log(`[MapPack] Cache MISS${usingLive ? ' (bypassed — live location)' : ''}: fetching fresh for "${cacheKey}" @ ${city},${state}`);
+    // For the Maps surface, the direct google.com/maps puppeteer scrape is the exact list a
+    // prospect sees there, and the scraped URL doubles as the verification link. For the
+    // Search surfaces (place/business) the ranking comes from DataForSEO, which pins the
+    // location and returns the matching check_url.
+    const gmaps = matchType === 'map' && coords ? await scrapeMapsPack(vertical, city, coords) : null;
     if (gmaps) {
       places = gmaps.places;
       dataSource = 'google_maps';
@@ -268,17 +384,16 @@ export async function getMapPackPosition(
         console.log(`  #${i + 1} "${p.name}" reviews:${p.user_ratings_total} place_id:${p.place_id || 'none'}`)
       );
     } else {
-      // Fallback 1: DataForSEO Local Finder (Google Search Places tab — different surface,
-      // close but not identical ordering to Maps).
-      const dfsResult = await getMapsPackFromDFS(vertical, city, state);
+      // Fallback / Search-surface primary: DataForSEO (endpoint chosen by matchType).
+      const dfsResult = await getMapsPackFromDFS(vertical, city, state, matchType, coords);
       if (dfsResult) {
         places = dfsResult.places;
         dataSource = dfsResult.source;
         checkUrl = dfsResult.checkUrl;
       } else {
-        // Fallback 2: Google Places text search (least accurate — ranks by relevance).
+        // Last resort: Google Places text search (least accurate — ranks by relevance).
         const query = `${vertical} ${city}`;
-        console.log(`[MapPack] Maps scrape + DFS unavailable — falling back to Google Places for "${query}"`);
+        console.log(`[MapPack] ${matchType} source + DFS unavailable — falling back to Google Places for "${query}"`);
         places = await searchPlaces(query, coords ?? undefined);
         if (!places.length) {
           console.error(`[MapPack] No results for "${query}" — check GOOGLE_PLACES_API_KEY quota`);
@@ -291,38 +406,59 @@ export async function getMapPackPosition(
         );
       }
     }
-    db.prepare(
+    // Only persist shared (non-live-location) snapshots.
+    if (!usingLive) db.prepare(
       `INSERT OR REPLACE INTO mappack_cache (keyword,city,state,items_json) VALUES (?,?,?,?)`
     ).run(cacheKey, city, state, JSON.stringify({ checkUrl, places }));
   }
 
   // ── Find lead ────────────────────────────────────────────────────────────────
   let leadIdx = -1;
+  let leadMatchMethod: 'place_id' | 'name_review' | 'none' = 'none';
 
   // Pass 1: exact place_id
   if (leadPlaceId) {
     leadIdx = places.findIndex(p => p.place_id === leadPlaceId);
-    if (leadIdx !== -1)
+    if (leadIdx !== -1) {
+      leadMatchMethod = 'place_id';
       console.log(`[MapPack] ✓ Lead by place_id: #${leadIdx + 1} "${places[leadIdx].name}"`);
-    else
+    } else {
       console.warn(`[MapPack] ✗ Lead place_id "${leadPlaceId}" not in top-${places.length} results`);
+    }
   }
 
-  // Pass 2: name + review count fuzzy match
+  // Pass 2: name + review-count fuzzy match.
+  // Industry/legal-suffix words ("heating", "cooling", "llc", …) are shared by nearly every
+  // business in the pack, so matching on them alone falsely tagged e.g. "Rick's Affordable
+  // Heating" as "Perrysburg Plumbing & Heating". We therefore require overlap on a DISTINCTIVE
+  // token (brand/owner words) and only use generic words as a weak tiebreak.
   if (leadIdx === -1) {
-    const leadWords = leadName.toLowerCase().replace(/[-.']/g, ' ').split(' ').filter(w => w.length > 3);
+    const tokenize = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+    const leadTokens   = tokenize(leadName);
+    const distinctive  = leadTokens.filter(w => !GENERIC_NAME_WORDS.has(w));
+    // "within 2% or ±3" — review counts drift between sources (1202 vs 1200) and across surfaces.
+    const reviewClose = (n: number) =>
+      leadReviewCount > 0 && n > 0 &&
+      (Math.abs(n - leadReviewCount) <= 3 || Math.abs(n - leadReviewCount) / leadReviewCount <= 0.02);
+
     let bestScore = 0;
     for (let i = 0; i < places.length; i++) {
-      const t = places[i].name.toLowerCase();
-      let score = 0;
-      if (leadWords.some(w => t.includes(w)))                         score += 40;
-      if (leadReviewCount > 0 && places[i].user_ratings_total === leadReviewCount) score += 80;
+      const pTokens = new Set(tokenize(places[i].name));
+      const distinctiveHits = distinctive.filter(w => pTokens.has(w)).length;
+      // No distinctive overlap → not a match, regardless of shared generic words.
+      if (distinctiveHits === 0) continue;
+      let score = distinctiveHits * 30;
+      if (leadTokens.some(w => GENERIC_NAME_WORDS.has(w) && pTokens.has(w))) score += 5; // weak tiebreak
+      if (reviewClose(places[i].user_ratings_total))                        score += 60;
       if (score > bestScore) { bestScore = score; leadIdx = i; }
     }
-    if (leadIdx !== -1)
-      console.log(`[MapPack] ✓ Lead by name match: #${leadIdx + 1} "${places[leadIdx].name}"`);
-    else
-      console.warn(`[MapPack] ✗ Lead not found in results`);
+    if (leadIdx !== -1) {
+      leadMatchMethod = 'name_review';
+      console.log(`[MapPack] ✓ Lead by name match: #${leadIdx + 1} "${places[leadIdx].name}" (score ${bestScore}, distinctive=[${distinctive.join(',')}])`);
+    } else {
+      console.warn(`[MapPack] ✗ Lead not found by name (no distinctive-token overlap for "${leadName}")`);
+    }
   }
 
   const leadPos         = leadIdx !== -1 ? leadIdx + 1 : 99;
@@ -369,7 +505,6 @@ export async function getMapPackPosition(
 
   let compPlaceId = compPlace.place_id;
   if (!compPlaceId) {
-    const coords = await geocodeCity(city, state);
     const found = await searchPlaces(`${compPlace.name} ${city} ${state}`, coords ?? undefined);
     compPlaceId = found.find(p => p.name.toLowerCase() === compPlace.name.toLowerCase())?.place_id
       || found[0]?.place_id || '';
@@ -439,10 +574,20 @@ export async function getMapPackPosition(
   const inPack = leadPos <= 3 ? ' ✓ IN TOP-3 MAP PACK' : leadPos <= 10 ? ' (top 10)' : '';
   console.log(`[MapPack] Google Maps rank: #${leadPos}${inPack} for "${vertical} ${city}" (source: ${dataSource})`);
 
-  // Prefer the DFS check_url (location-pinned, reproduces the exact scraped SERP);
-  // fall back to a plain Google search URL when the data came from Places API.
-  const verificationUrl = checkUrl || buildSearchUrl(vertical, city);
-  const primaryMapData: MapPackResult = { leadPosition: leadPos, fullPack, dataSource, verificationUrl, competitor };
+  // Prefer the source's own location-pinned URL (Maps scrape URL or DFS check_url —
+  // reproduces the exact scraped SERP); fall back to a plain Google URL for the surface.
+  const verificationUrl = checkUrl || buildSearchUrl(vertical, city, matchType);
+  const lead = {
+    found:        leadIdx !== -1,
+    matchMethod:  leadMatchMethod,
+    name:         leadPlaceResult?.name ?? leadName,
+    rating:       leadPlaceResult?.rating ?? leadRating,
+    review_count: leadPlaceResult?.user_ratings_total ?? leadReviewCount,
+    place_id:     leadPlaceResult?.place_id || leadPlaceId || null,
+  };
+  const primaryMapData: MapPackResult = {
+    leadPosition: leadPos, fullPack, dataSource, verificationUrl, matchType, surfaceLabel, lead, competitor,
+  };
   return { primaryMapData, leadPosition: leadPos };
 }
 
@@ -517,5 +662,85 @@ export async function getOrganicPosition(
   } catch (e: any) {
     console.warn('[Organic] error:', e.message);
     return null;
+  }
+}
+
+// ─── Organic Search Snapshot (richer — for the Search page of the ARMA report) ──
+// Returns each side's organic listing CONTENT (title, displayed domain, description)
+// with no rank numbers — the ARMA report only shows whether a business appears on
+// page one and how its listing reads, never its position, so ranks are deliberately
+// not exposed here.
+
+export interface OrganicListing {
+  title: string;
+  domain: string;
+  description: string;
+}
+
+export interface OrganicSnapshot {
+  // false → the organic SERP could not be fetched (no DFS creds / API error), so
+  // "neither appears" must not be asserted. true → the SERP was read; a null listing
+  // then genuinely means the business isn't on page one.
+  available: boolean;
+  lead: OrganicListing | null;
+  competitor: OrganicListing | null;
+}
+
+export async function getOrganicSnapshot(
+  leadDomain: string,
+  competitorDomain: string,
+  keyword: string,
+  city: string,
+  state: string,
+): Promise<OrganicSnapshot> {
+  const empty: OrganicSnapshot = { available: false, lead: null, competitor: null };
+  if (!process.env.DATAFORSEO_LOGIN) return empty;
+  try {
+    const fullState = await resolveStateName(city, state);
+    const res = await fetchT(
+      'https://api.dataforseo.com/v3/serp/google/organic/live/advanced',
+      {
+        method:  'POST',
+        headers: { Authorization: `Basic ${dfsAuth()}`, 'Content-Type': 'application/json' },
+        body:    JSON.stringify([{
+          keyword,
+          location_name: `${city},${fullState},United States`,
+          language_name: 'English',
+          depth: 20,
+        }]),
+      },
+      30000,
+    );
+    const json  = await res.json();
+    const task0 = json.tasks?.[0];
+    if (task0?.status_code !== 20000) {
+      console.warn(`[Organic] snapshot DFS status ${task0?.status_code}: ${task0?.status_message}`);
+      return empty;
+    }
+    const items: any[] = (task0?.result?.[0]?.items ?? []).filter((i: any) => i.type === 'organic');
+    const clean = (d: string) => (d ?? '').replace(/^www\./, '').toLowerCase();
+    const leadD = clean(leadDomain), compD = clean(competitorDomain);
+    const matches = (i: any, d: string) =>
+      !!d && (clean(i.domain) === d || (i.url ?? '').toLowerCase().includes(d));
+
+    const leadHit = items.find((i: any) => matches(i, leadD));
+    const compHit = compD ? items.find((i: any) => matches(i, compD)) : null;
+
+    console.log(`[Organic] snapshot for "${keyword}": lead "${leadD}" ${leadHit ? 'found' : 'not found'} | comp "${compD}" ${compHit ? 'found' : 'not found'}`);
+
+    const toListing = (hit: any, fallbackDomain: string): OrganicListing => ({
+      title:       hit.title ?? '',
+      domain:      clean(hit.domain) || fallbackDomain,
+      description: hit.description ?? hit.snippet ?? '',
+    });
+
+    return {
+      available: true,
+      lead:       leadHit ? toListing(leadHit, leadD) : null,
+      competitor: compHit ? toListing(compHit, compD) : null,
+    };
+  } catch (e: any) {
+    console.warn('[Organic] snapshot error:', e.message);
+    return empty;
   }
 }

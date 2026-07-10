@@ -4,7 +4,11 @@ info:
   description: |
     GrowthScope / ARMA Audit Engine — generates local SEO audit reports for small businesses.
 
-    **Typical workflow:**
+    **Primary endpoint (used by the dashboard UI):**
+    - `POST /arma-report` — self-contained 5-page briefing vs a **manually supplied competitor**
+      (`competitor_url`, optional `competitor_position`). One call, no prerequisites.
+
+    **Legacy workflow (API-only, no longer in the UI):**
     1. `POST /lite-report` — scores a business, locks competitor data, returns a PDF (or JSON) lite report
     2. `POST /full-report` — deep-dive audit PDF; reads the competitor locked by step 1
 
@@ -152,6 +156,96 @@ paths:
                   value: { error: "No Lite Report found. Call POST /lite-report first." }
         '500':
           description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /arma-report:
+    post:
+      tags: [Reports]
+      summary: Generate the ARMA Website Report (5-page editorial briefing)
+      description: |
+        Self-contained 5-page PDF that walks the customer journey gap-by-gap against a
+        **manually supplied competitor** (`competitor_url`) — one page each for Trust
+        (reviews vs competitor), Search (organic listing content), and Speed (mobile
+        PageSpeed), each closing with an estimated monthly-loss banner, plus a cover
+        and a closing "two ways forward" CTA.
+
+        The competitor is no longer auto-selected by Google Maps/DataForSEO ranking,
+        so the report carries no ranking or position data anywhere — Search only
+        compares listing content (title/description), never rank numbers.
+
+        Pulls live data in one call — Google Business Profile for both businesses,
+        organic SERP listing content, mobile PageSpeed and a homepage reviews check —
+        so no prior call is required.
+
+        Add `?format=json` (or `"format": "json"` in the body) to receive the
+        assembled report data as JSON instead of a PDF.
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [json]
+          description: Return raw JSON instead of a PDF binary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArmaReportRequest'
+            examples:
+              pdf_default:
+                summary: Plumber in Bronx NY vs a manually chosen competitor (returns PDF)
+                value:
+                  url: https://example-plumber.com
+                  city: Bronx
+                  state: NY
+                  vertical: Plumbing
+                  competitor_url: https://competitor.com
+              pdf_with_competitor_position:
+                summary: Junk removal in Plano TX with the competitor's known Google Maps rank
+                value:
+                  url: https://www.quickjunkremoval.org/
+                  city: Plano
+                  state: TX
+                  vertical: Junk Removal
+                  competitor_url: https://www.junk-king.com
+                  competitor_position: 2
+              json_format:
+                summary: Return JSON for debugging
+                value:
+                  url: https://example-plumber.com
+                  city: Bronx
+                  state: NY
+                  vertical: Plumbing
+                  competitor_url: https://competitor.com
+                  format: json
+      responses:
+        '200':
+          description: |
+            Default: `application/pdf` binary with
+            `Content-Disposition: attachment; filename="ARMA_Report_<domain>.pdf"`.
+            With `format=json`: the assembled report data object.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArmaReportData'
+        '400':
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "url, city, state, competitor_url required"
+        '500':
+          description: Server error (upstream data source or PDF render failure)
           content:
             application/json:
               schema:
@@ -414,6 +508,167 @@ components:
           type: string
           enum: [json]
           description: Return raw JSON instead of a PDF binary
+
+    ArmaReportRequest:
+      type: object
+      required: [url, city, state, competitor_url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Full URL of the lead's website
+          example: https://example-plumber.com
+        city:
+          type: string
+          description: City where the business operates
+          example: Bronx
+        state:
+          type: string
+          description: Two-letter US state abbreviation
+          example: NY
+        vertical:
+          type: string
+          description: Business vertical / service category. Defaults to `"Home Services"` if omitted.
+          example: Plumbing
+        competitor_url:
+          type: string
+          format: uri
+          description: Full URL of the manually chosen competitor's website — used for every comparison in the report instead of an auto-selected ranking competitor.
+          example: https://competitor.com
+        competitor_position:
+          type: integer
+          minimum: 1
+          description: Optional manually supplied Google Maps rank for the competitor, shown as context only (e.g. "ranked #2 on Google Maps") on the cover page. Not fetched, not paired against a lead-side rank, and never used in the loss calculation.
+          example: 2
+        format:
+          type: string
+          enum: [json]
+          description: Return raw JSON instead of a PDF binary
+
+    ArmaReportData:
+      type: object
+      description: |
+        The fully assembled report data returned when `format=json` — the exact object
+        the PDF is rendered from.
+      properties:
+        date:
+          type: string
+          description: Report date, uppercase long form
+          example: "JULY 10, 2026"
+        city:
+          type: string
+          example: Plano
+        state:
+          type: string
+          example: TX
+        vertical:
+          type: string
+          example: Junk Removal
+        organicQuery:
+          type: string
+          description: Buyer-intent search phrase used for the organic SERP snapshot
+          example: junk removal Plano
+        lead:
+          type: object
+          description: The audited business
+          properties:
+            name:
+              type: string
+              example: Quick Junk Removal
+            rating:
+              type: number
+              format: float
+              description: Google Business Profile star rating
+              example: 5
+            reviews:
+              type: integer
+              description: Google review count
+              example: 255
+            domain:
+              type: string
+              example: quickjunkremoval.org
+            speed:
+              type: integer
+              nullable: true
+              description: Mobile PageSpeed score 0–100, `null` when the check failed
+              example: 62
+            reviewsShownOnHome:
+              type: integer
+              description: Approximate number of reviews surfaced on the homepage (0 = none found)
+              example: 0
+        competitor:
+          type: object
+          description: The manually supplied competitor
+          properties:
+            name:
+              type: string
+              example: Junk King Plano
+            rating:
+              type: number
+              format: float
+              example: 4.9
+            reviews:
+              type: integer
+              example: 491
+            domain:
+              type: string
+              example: junk-king.com
+            speed:
+              type: integer
+              nullable: true
+              example: 97
+            title:
+              type: string
+              description: Competitor's organic listing title ("" when not found)
+              example: "Junk Removal Services in Plano, TX"
+            description:
+              type: string
+              description: Competitor's organic listing description ("" when not found)
+            position:
+              type: integer
+              nullable: true
+              description: The manually supplied `competitor_position`, echoed back — context only
+              example: 2
+        isUrgent:
+          type: boolean
+          description: Whether the vertical is emergency-driven (affects report copy)
+        organicAvailable:
+          type: boolean
+          description: Whether an organic SERP snapshot could be fetched
+        leadAppearsOrganically:
+          type: boolean
+        competitorAppearsOrganically:
+          type: boolean
+        activeGaps:
+          type: object
+          description: Which measurable steps are genuine gaps for this business
+          properties:
+            trust:
+              type: boolean
+            speed:
+              type: boolean
+        totalLoss:
+          type: array
+          description: Estimated total monthly loss range in USD `[low, high]`
+          items:
+            type: number
+          minItems: 2
+          maxItems: 2
+          example: [343, 636]
+        gaps:
+          type: object
+          description: Per-gap monthly loss ranges in USD `[low, high]`
+          properties:
+            trust:
+              type: array
+              items:
+                type: number
+              example: [171, 318]
+            speed:
+              type: array
+              items:
+                type: number
+              example: [171, 318]
 
     FullReportRequest:
       type: object

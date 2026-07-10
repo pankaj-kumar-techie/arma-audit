@@ -29,13 +29,9 @@
     <!-- Left Navigation and Controls -->
     <div class="sidebar">
       <div class="navigation-tabs">
-        <button class="tab-btn active" data-tab="lite-tab">
-          <i class="fa-solid fa-bolt"></i>
-          <span>Lite Audit</span>
-        </button>
-        <button class="tab-btn" data-tab="full-tab">
-          <i class="fa-solid fa-file-contract"></i>
-          <span>Full Audit</span>
+        <button class="tab-btn active" data-tab="arma-tab">
+          <i class="fa-solid fa-newspaper"></i>
+          <span>ARMA Report</span>
         </button>
         <button class="tab-btn" data-tab="tools-tab">
           <i class="fa-solid fa-sliders"></i>
@@ -43,101 +39,88 @@
         </button>
       </div>
 
-      <!-- Tab 1 Panel: Lite Report -->
-      <div id="lite-tab" class="panel active">
+      <!-- Tab 1 Panel: ARMA Website Report -->
+      <div id="arma-tab" class="panel active">
         <div class="panel-header">
           <h2 class="panel-title">
-            <i class="fa-solid fa-bolt" style="color: var(--primary);"></i>
-            Lite Report Generator
+            <i class="fa-solid fa-newspaper" style="color: var(--primary);"></i>
+            ARMA Report
           </h2>
           <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">
-            Pulls basic GBP positioning, reviews, local ranking keyword comparison, and builds cold email templates.
+            Enter the business and the competitor to beat — everything else is automated.
           </p>
         </div>
 
-        <form id="lite-form">
+        <form id="arma-form">
+          <div class="form-section-title"><span class="step-num">1</span> Your Business</div>
+
           <div class="form-group">
-            <label for="lite-url">Website URL</label>
+            <label for="arma-url">Website</label>
             <div class="input-wrapper">
               <i class="fa-solid fa-link"></i>
-              <input type="url" id="lite-url" class="form-input" placeholder="https://example.com" required>
+              <input type="text" inputmode="url" autocomplete="url" id="arma-url" class="form-input" placeholder="quickjunkremoval.org" required>
             </div>
           </div>
 
           <div class="form-row">
             <div class="form-group">
-              <label for="lite-city">City</label>
+              <label for="arma-city">City</label>
               <div class="input-wrapper">
                 <i class="fa-solid fa-city"></i>
-                <input type="text" id="lite-city" class="form-input" placeholder="e.g. Anchorage" required>
+                <input type="text" id="arma-city" class="form-input" placeholder="Plano" required>
               </div>
             </div>
             <div class="form-group">
-              <label for="lite-state">State Code</label>
+              <label for="arma-state">State</label>
               <div class="input-wrapper">
                 <i class="fa-solid fa-map-pin"></i>
-                <input type="text" id="lite-state" class="form-input" placeholder="e.g. AK" maxlength="2" style="text-transform: uppercase;" required>
+                <input type="text" id="arma-state" class="form-input" placeholder="TX" maxlength="2" style="text-transform: uppercase;" required>
               </div>
             </div>
           </div>
 
           <div class="form-group">
-            <label for="lite-vertical">Vertical / Niche (Optional)</label>
+            <label for="arma-vertical">Industry <span class="label-hint">optional — defaults to Home Services</span></label>
             <div class="input-wrapper">
               <i class="fa-solid fa-briefcase"></i>
-              <input type="text" id="lite-vertical" class="form-input" placeholder="e.g. Roofing (Defaults to Home Services)">
+              <input type="text" id="arma-vertical" class="form-input" placeholder="Junk Removal">
             </div>
           </div>
 
+          <div class="form-section-title"><span class="step-num">2</span> Competitor to Beat</div>
+
           <div class="form-group">
-            <label>Output Format</label>
-            <div class="toggle-group">
-              <button type="button" class="toggle-btn active" data-format="pdf">PDF Report</button>
-              <button type="button" class="toggle-btn" data-format="json">Raw JSON</button>
-            </div>
-          </div>
-
-          <button type="submit" class="action-btn" id="lite-submit">
-            <i class="fa-solid fa-wand-magic-sparkles"></i>
-            <span>Generate Lite Audit</span>
-          </button>
-        </form>
-      </div>
-
-      <!-- Tab 2 Panel: Full Report -->
-      <div id="full-tab" class="panel">
-        <div class="panel-header">
-          <h2 class="panel-title">
-            <i class="fa-solid fa-file-contract" style="color: var(--primary);"></i>
-            Full Report Generator
-          </h2>
-          <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">
-            Deep crawlers, Google PageSpeed, full review audit, Google Maps analysis, and Claude AI reports.
-          </p>
-        </div>
-
-        <div style="background: rgba(99, 102, 241, 0.1); border: 1px dashed var(--primary); padding: 0.75rem; border-radius: 0.5rem; font-size: 0.8rem; line-height: 1.4; color: #a5b4fc; margin-bottom: 0.5rem;">
-          <i class="fa-solid fa-circle-info" style="margin-right: 0.25rem;"></i>
-          <strong>Prerequisite:</strong> You must successfully generate a <strong>Lite Report</strong> for the domain first to establish the target in the database.
-        </div>
-
-        <form id="full-form">
-          <div class="form-group">
-            <label for="full-url">Website URL</label>
+            <label for="arma-competitor-url">Competitor Website</label>
             <div class="input-wrapper">
-              <i class="fa-solid fa-link"></i>
-              <input type="url" id="full-url" class="form-input" placeholder="https://example.com" required>
+              <i class="fa-solid fa-user-group"></i>
+              <input type="text" inputmode="url" id="arma-competitor-url" class="form-input" placeholder="junk-king.com" required>
             </div>
           </div>
 
-          <button type="submit" class="action-btn" id="full-submit">
-            <i class="fa-solid fa-fire"></i>
-            <span>Generate Full Audit PDF</span>
+          <div class="form-group">
+            <label for="arma-competitor-position">Their Google Position <span class="label-hint">optional — shown as context only</span></label>
+            <div class="input-wrapper">
+              <i class="fa-solid fa-ranking-star"></i>
+              <input type="number" id="arma-competitor-position" class="form-input" placeholder="2" min="1" max="20" step="1">
+            </div>
+          </div>
+
+          <button type="submit" class="action-btn" id="arma-submit">
+            <i class="fa-solid fa-wand-magic-sparkles"></i>
+            <span>Generate Report</span>
           </button>
+
+          <div class="output-row">
+            <span class="output-label">Output</span>
+            <div class="toggle-group output-toggle" id="arma-format-group">
+              <button type="button" class="toggle-btn active" data-arma-format="pdf">PDF</button>
+              <button type="button" class="toggle-btn" data-arma-format="json">JSON</button>
+            </div>
+          </div>
         </form>
       </div>
 
-      <!-- Tab 3 Panel: Diagnostics and settings (static in list) -->
+      <!-- Tab 2 Panel: Diagnostics and settings (static in list) -->
       <div id="tools-tab" class="panel">
         <div class="panel-header">
           <h2 class="panel-title">
@@ -147,6 +130,14 @@
           <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">
             Direct API tools for checking search engines, testing speed, and database status.
           </p>
+        </div>
+
+        <div class="form-group">
+          <label style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+            <span><i class="fa-solid fa-code" style="color: var(--primary);"></i> Developer Mode</span>
+            <input type="checkbox" id="dev-mode-toggle" style="width:auto; transform: scale(1.3); cursor:pointer;">
+          </label>
+          <p style="font-size:0.72rem; color:var(--text-muted); margin:0.25rem 0 0;">Reveals the Pipeline Trace tool for capturing exactly what the system extracts.</p>
         </div>
 
         <div class="form-group">
@@ -205,6 +196,60 @@
             <i class="fa-solid fa-map"></i> Run MapPack Debug
           </button>
         </form>
+
+        <!-- Pipeline Trace — only visible when Developer Mode is enabled -->
+        <div id="dev-trace-section" style="display:none;">
+          <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 0.5rem 0;">
+          <form id="trace-form" style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <h4 style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">
+              <i class="fa-solid fa-microscope" style="color: var(--primary);"></i> Pipeline Trace (Dev)
+            </h4>
+            <p style="font-size:0.72rem; color:var(--text-muted); margin:-0.25rem 0 0;">
+              Runs the real ranking pipeline and captures every query, URL, coordinate and decision as a copy-pasteable log.
+            </p>
+            <div class="form-group">
+              <div class="input-wrapper">
+                <i class="fa-solid fa-link"></i>
+                <input type="url" id="trace-url" class="form-input" placeholder="https://example.com" required style="padding-left: 2rem;">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <div class="input-wrapper">
+                  <i class="fa-solid fa-city"></i>
+                  <input type="text" id="trace-city" class="form-input" placeholder="City" required style="padding-left: 2rem;">
+                </div>
+              </div>
+              <div class="form-group">
+                <div class="input-wrapper">
+                  <i class="fa-solid fa-map-pin"></i>
+                  <input type="text" id="trace-state" class="form-input" placeholder="State" required maxlength="2" style="padding-left: 2rem; text-transform: uppercase;">
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="input-wrapper">
+                <i class="fa-solid fa-briefcase"></i>
+                <input type="text" id="trace-vertical" class="form-input" placeholder="Vertical (e.g. HVAC contractor)" style="padding-left: 2rem;">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="trace-match" style="font-size:0.75rem;">Match surface</label>
+              <select id="trace-match" class="form-input">
+                <option value="business" selected>Business (Search 3-pack)</option>
+                <option value="place">Place (Search "Places")</option>
+                <option value="map">Map (Google Maps)</option>
+              </select>
+            </div>
+            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.78rem; color:var(--text-secondary); cursor:pointer;">
+              <input type="checkbox" id="trace-use-location" checked style="width:auto; cursor:pointer;">
+              Use my live location (Business/Place)
+            </label>
+            <button type="submit" class="btn-secondary" id="trace-submit-btn">
+              <i class="fa-solid fa-microscope"></i> Run Pipeline Trace
+            </button>
+          </form>
+        </div>
       </div>
 
       <!-- Terminal logs (Always visible at the bottom of the sidebar) -->

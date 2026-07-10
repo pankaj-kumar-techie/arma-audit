@@ -6,7 +6,9 @@
   "scripts": {
     "start": "ts-node server.ts",
     "dev": "ts-node server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "ts-node test/armaRegression.ts",
+    "test:arma": "ts-node test/armaRegression.ts",
+    "test:arma:pdf": "ts-node test/armaRegression.ts --pdf"
   },
   "keywords": [],
   "author": "",

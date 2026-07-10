@@ -164,6 +164,16 @@ if (!db.prepare(`SELECT 1 FROM migrations WHERE name='flush_mappack_stabilized_f
   console.log('[DB] Migration: flushed mappack_cache (stabilized feed read)');
 }
 
+// Migration v14: flush cache — the cache key now embeds the match surface
+// ("vertical::map" | "vertical::place" | "vertical::business"), since map/place/business
+// rank independently. Old rows are keyed by bare "vertical" and would be served for the
+// wrong surface, so drop them all.
+if (!db.prepare(`SELECT 1 FROM migrations WHERE name='flush_mappack_match_type'`).get()) {
+  db.prepare(`DELETE FROM mappack_cache`).run();
+  db.prepare(`INSERT INTO migrations (name) VALUES ('flush_mappack_match_type')`).run();
+  console.log('[DB] Migration: flushed mappack_cache (per-surface cache key: map/place/business)');
+}
+
 // Migration v5: drop redundant lead_id column (was always equal to domain).
 if (!db.prepare(`SELECT 1 FROM migrations WHERE name='drop_lead_id_column'`).get()) {
   const cols: any[] = db.prepare(`PRAGMA table_info(leads)`).all();

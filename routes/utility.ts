@@ -1,9 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { asyncHandler } from '../lib/http';
+import { asyncHandler, normalizeUrl } from '../lib/http';
 import { getPageSpeed } from '../services/pagespeed';
 import { placesTextSearch } from '../lib/places';
 import { dfsAuth } from '../lib/auth';
-import { resolveStateName } from '../services/gbp';
+import { resolveStateName, getLeadGBP } from '../services/gbp';
+import { getWeightedPosition, type MatchType } from '../services/mappack';
+import { captureConsole } from '../lib/trace';
 import { fetchT } from '../lib/http';
 import db from '../db';
 
@@ -260,5 +262,85 @@ router.delete('/cache-clear', (req: Request, res: Response) => {
   const { changes } = db.prepare(`DELETE FROM mappack_cache`).run();
   res.json({ cleared: changes, message: 'All map pack cache entries deleted' });
 });
+
+// ─── Pipeline Trace (Developer debug tool) ───────────────────────────────────
+// Runs the REAL ranking pipeline (GBP lookup → map-pack lookup for the chosen surface)
+// exactly as /lite-report does, but captures every console line the engine emits and
+// returns it alongside the resolved parameters. The point: whatever the system extracts
+// — the exact queries/URLs/coords/raw counts/ranking decisions — is handed back in a
+// copy-pasteable log so a mismatch can be diagnosed from real data rather than guesses.
+//
+// POST /debug/trace  { url, city, state, vertical?, matchType?, lat?, lng? }
+router.post('/debug/trace', asyncHandler(async (req: Request, res: Response) => {
+  const started = Date.now();
+  const { url: rawUrl, city, state, vertical, matchType: rawMatchType, lat, lng } = req.body ?? {};
+  if (!rawUrl || !city || !state) return res.status(400).json({ error: 'url, city, state required' });
+
+  const url      = normalizeUrl(rawUrl);
+  const domain   = new URL(url).hostname.replace('www.', '');
+  const bizName  = domain.split('.')[0].replace(/-/g, ' ');
+  const niche    = vertical || 'Home Services';
+  const matchType: MatchType =
+    rawMatchType === 'place' || rawMatchType === 'business' || rawMatchType === 'map' ? rawMatchType : 'map';
+  const userLocation =
+    typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)
+      ? { lat, lng } : undefined;
+
+  const { result, logs } = await captureConsole(async () => {
+    console.log(`[Trace] ▶ START url=${url} domain=${domain} bizName="${bizName}" niche="${niche}"`);
+    console.log(`[Trace] params: matchType=${matchType} liveLocation=${userLocation ? `${userLocation.lat},${userLocation.lng}` : 'none'} submitted="${city}, ${state}"`);
+
+    const gbp = await getLeadGBP(bizName, city, state, domain);
+    const matchName   = gbp.real_name && gbp.real_name.length > 2 ? gbp.real_name : bizName;
+    // Audit the SUBMITTED market (what the user searches manually), not the lead's GBP city.
+    const marketCity  = city;
+    const marketState = state;
+    const gbpCity  = (gbp as any).gbp_city  && (gbp as any).gbp_city.length  > 1 ? (gbp as any).gbp_city  : city;
+    const gbpState = (gbp as any).gbp_state && (gbp as any).gbp_state.length > 1 ? (gbp as any).gbp_state : state;
+    console.log(`[Trace] GBP resolved: name="${matchName}" place_id=${gbp.place_id || 'NONE'} rating=${gbp.rating} reviews=${gbp.review_count} | GBP city="${gbpCity}, ${gbpState}"`);
+    console.log(`[Trace] Auditing SUBMITTED market "${marketCity}, ${marketState}" (the manual-search location)${gbpCity.toLowerCase() !== marketCity.toLowerCase() ? ` — note lead's GBP city differs ("${gbpCity}, ${gbpState}")` : ''}.`);
+
+    const weighted = await getWeightedPosition(
+      niche, marketCity, marketState, matchName, gbp.review_count, gbp.place_id, gbp.rating,
+      { matchType, userLocation },
+    );
+
+    const pmd = weighted?.primaryMapData;
+    return {
+      gbp: {
+        matched_name: matchName, place_id: gbp.place_id || null,
+        rating: gbp.rating, review_count: gbp.review_count,
+        market_city: marketCity, market_state: marketState,
+        gbp_city: gbpCity, gbp_state: gbpState,
+        gbp_city_differs: gbpCity.toLowerCase() !== marketCity.toLowerCase(),
+      },
+      ranking: weighted ? {
+        lead_position:   weighted.weightedPosition,
+        data_source:     pmd!.dataSource,
+        surface_label:   pmd!.surfaceLabel,
+        match_type:      pmd!.matchType,
+        verification_url: pmd!.verificationUrl,
+        ranking_keywords: weighted.rankingKeywords,
+        competitor: pmd!.competitor,
+        full_pack: pmd!.fullPack,
+      } : null,
+    };
+  });
+
+  res.json({
+    ok: !!result.ranking,
+    params: {
+      url, domain, submitted_city: city, submitted_state: state,
+      vertical: niche, match_type: matchType,
+      live_location: userLocation ?? null,
+      used_live_location: !!userLocation,
+    },
+    gbp: result.gbp,
+    ranking: result.ranking,
+    timing_ms: Date.now() - started,
+    log_count: logs.length,
+    logs,  // [{ t, level, msg }] — the full engine trace, in order
+  });
+}));
 
 export default router;

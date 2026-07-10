@@ -55,6 +55,9 @@ export interface LiteReportParams {
   fullPack: any[];
   rankingKeywords: Array<{ keyword: string; position: number | null }>;
   verificationUrl: string;
+  // Human label for the matched surface ("Google Maps" | "Google Search – Places" |
+  // "Google Search – Businesses"). Optional — falls back to deriving from verificationUrl.
+  surfaceLabel?: string;
   coldEmail: { subject: string; body: string };
 }
 
@@ -80,8 +83,10 @@ export function generateLiteReportHTML(p: LiteReportParams): string {
   // surface sees a different position and (reasonably) concludes the report is wrong.
   // That mismatch was the source of "the positions don't match" complaints.
   const onMaps       = /google\.com\/maps/.test(verificationUrl);
-  const surfaceLabel = onMaps ? 'Google Maps' : "Google's local search results";
-  const rankNote     = `Note: ${onMaps ? 'Google Maps' : "Google's local results"} are personalized by your location, signed-in account, and time of day — and Google Maps and the local pack in Google Search are ranked separately, so a manual check can land a position or two off. This is a live snapshot, not a fixed score.`;
+  // Prefer the explicit surface label from the selected matchType; fall back to deriving it
+  // from the verification URL for older callers that don't pass one.
+  const surfaceLabel = p.surfaceLabel ?? (onMaps ? 'Google Maps' : "Google's local search results");
+  const rankNote     = `Note: ${surfaceLabel} results are personalized by your location, signed-in account, and time of day — and Google Maps, the Search "Places" list, and the Search "Businesses" pack are each ranked separately, so a manual check on a different surface can land a position or two off. This is a live snapshot, not a fixed score.`;
 
   const headline  = pickHeadline(lead.position, competitor.name, lead.review_count, competitor.review_count, competitor.position);
   const isTop     = lead.position === 1;

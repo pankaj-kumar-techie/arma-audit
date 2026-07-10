@@ -11,6 +11,7 @@ dotenv.config();
 
 import liteReportRouter from './routes/liteReport';
 import fullReportRouter from './routes/fullReport';
+import armaReportRouter from './routes/armaReport';
 import utilityRouter from './routes/utility';
 
 const PORT = process.env.PORT || 3002;
@@ -39,6 +40,7 @@ app.get('/docs.json', (_req, res) => res.json(swaggerDoc));
 
 app.use('/lite-report', liteReportRouter);
 app.use('/full-report', fullReportRouter);
+app.use('/arma-report', armaReportRouter);
 
 app.get('/', (req, res) => {
   const accept = req.headers.accept || '';
@@ -72,7 +74,8 @@ if (!process.env.VERCEL) {
   const server = app.listen(PORT, () => {
     console.log(`\n🚀 ARMA Audit Engine ready: http://localhost:${PORT}`);
     console.log(`   POST /lite-report  { url, city, state, vertical }`);
-    console.log(`   POST /full-report  { url }\n`);
+    console.log(`   POST /full-report  { url }`);
+    console.log(`   POST /arma-report  { url, city, state, vertical, competitor_url }\n`);
   });
   server.setTimeout(300000);
 }
